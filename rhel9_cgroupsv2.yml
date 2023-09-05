@@ -1,0 +1,101 @@
+# Set up Control Groups v2 (cgroups v2) via Ansible Playbook
+# Control Groups v2 in RHEL 9 is all about improving how Linux 
+# manages and allocates system resources to processes. It enhances 
+# resource control, isolation, and predictability, which are essential 
+# for ensuring the stability, performance, and security of a Linux 
+# server or workstation.
+---
+- name: Configure Control Groups v2
+  hosts: serverA, serverB  # Replace with your server hostnames or IP addresses
+  become: yes  # This enables sudo privileges for the tasks
+
+  tasks:
+    - name: Install systemd package
+      package:
+        name: systemd
+        state: present
+      tags:
+        - setup
+
+    - name: Enable systemd service
+      service:
+        name: systemd
+        enabled: yes
+        state: started
+      tags:
+        - setup
+
+    - name: Add cgroups v2 kernel parameter to GRUB
+      lineinfile:
+        path: /etc/default/grub
+        regexp: '^GRUB_CMDLINE_LINUX='
+        line: 'GRUB_CMDLINE_LINUX="rhgb quiet systemd.unified_cgroup_hierarchy=1"'
+      notify: Update GRUB
+      tags:
+        - setup
+
+    - name: Update GRUB
+      command: grub2-mkconfig -o /etc/grub2.cfg
+      notify: Reboot System
+      tags:
+        - setup
+
+    - name: Verify cgroups v2
+      command: mount -t cgroup2 none /sys/fs/cgroup
+      args:
+        warn: false
+      register: cgroups_v2_mount
+      changed_when: false
+      tags:
+        - setup
+
+    - name: Reboot System
+      command: reboot
+      async: 1
+      poll: 0
+      ignore_errors: yes
+      when: cgroups_v2_mount.stdout.find("File exists") == -1
+      tags:
+        - setup
+
+    - name: Wait for system to come back online
+      wait_for_connection:
+        delay: 60
+        timeout: 300
+      when: cgroups_v2_mount.stdout.find("File exists") == -1
+      tags:
+        - setup
+
+    - name: Create and Configure cgroup
+      command: >
+        cgcreate -g memory,cpuset:mygroup &&
+        cgset -r memory.limit_in_bytes=1G mygroup
+      tags:
+        - configure
+
+    # Add tasks for managing cgroups and processes as needed
+
+    - name: Ensure cgroups v2 settings persist across reboots
+      copy:
+        src: /etc/default/grub
+        dest: /etc/default/grub
+      notify: Update GRUB
+      tags:
+        - configure
+
+  handlers:
+    - name: Update GRUB
+      command: grub2-mkconfig -o /etc/grub2.cfg
+      tags:
+        - configure
+
+    - name: Reboot System
+      command: reboot
+      async: 1
+      poll: 0
+      ignore_errors: yes
+      tags:
+        - configure
+
+    # You can add more handlers for additional tasks
+
